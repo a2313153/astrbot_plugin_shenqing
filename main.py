@@ -2,6 +2,7 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Optional
+import asyncio
 
 
 class ApifoxModel:
@@ -10,7 +11,7 @@ class ApifoxModel:
         self.flag = flag
         self.reason = reason
 
-@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词来同意或拒绝进入群聊的插件", "1.0.0")
+@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词来同意或拒绝进入群聊的插件", "1.2.0")
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -20,7 +21,8 @@ class AppReviewPlugin(Star):
             "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
             "auto_accept": False,  # 是否自动同意所有申请
             "auto_reject": False,  # 是否自动拒绝所有申请
-            "reject_reason": "申请被拒绝"  # 拒绝理由
+            "reject_reason": "申请被拒绝",  # 拒绝理由
+            "delay_seconds": 0  # 延迟处理时间（秒）
         }
         
         # 如果传入了配置，则使用传入的配置
@@ -108,13 +110,22 @@ class AppReviewPlugin(Star):
         
         logger.info(f"收到加群请求: 用户ID={user_id}, 群ID={group_id}, 验证信息={comment}")
         
+        # 获取延迟时间
+        delay_seconds = self.config.get("delay_seconds", 0)
+        
         # 自动处理逻辑
         if self.config["auto_accept"]:
+            if delay_seconds > 0:
+                logger.info(f"将在 {delay_seconds} 秒后自动同意用户 {user_id} 加入群 {group_id} 的请求")
+                await asyncio.sleep(delay_seconds)
             await self.approve_request(event, flag, True)
             logger.info(f"自动同意用户 {user_id} 加入群 {group_id} 的请求")
             return
         
         if self.config["auto_reject"]:
+            if delay_seconds > 0:
+                logger.info(f"将在 {delay_seconds} 秒后自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
+                await asyncio.sleep(delay_seconds)
             await self.approve_request(event, flag, False, self.config["reject_reason"])
             logger.info(f"自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
             return
@@ -123,6 +134,9 @@ class AppReviewPlugin(Star):
         # 先检查是否包含拒绝关键词
         for keyword in self.config["reject_keywords"]:
             if keyword.lower() in comment.lower():
+                if delay_seconds > 0:
+                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
+                    await asyncio.sleep(delay_seconds)
                 await self.approve_request(event, flag, False, self.config["reject_reason"])
                 logger.info(f"根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
                 return
@@ -130,6 +144,9 @@ class AppReviewPlugin(Star):
         # 再检查是否包含接受关键词
         for keyword in self.config["accept_keywords"]:
             if keyword.lower() in comment.lower():
+                if delay_seconds > 0:
+                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
+                    await asyncio.sleep(delay_seconds)
                 await self.approve_request(event, flag, True)
                 logger.info(f"根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
                 return
