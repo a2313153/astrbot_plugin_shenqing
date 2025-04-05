@@ -34,5 +34,13 @@
     "title": "默认拒绝理由",
     "description": "自动拒绝申请时使用的理由",
     "default": "申请被拒绝"
+  },
+  "delay_seconds": {
+    "type": "int",
+    "title": "延迟处理时间",
+    "description": "处理入群申请前等待的时间（秒），设置为0表示不延迟",
+    "default": 0,
+    "min": 0,
+    "max": 300
   }
 }
