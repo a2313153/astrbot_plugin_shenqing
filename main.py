@@ -3,6 +3,8 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Optional
 import asyncio
+import aiohttp
+import time
 
 
 class ApifoxModel:
@@ -11,17 +13,16 @@ class ApifoxModel:
         self.flag = flag
         self.reason = reason
 
-@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词来同意或拒绝进入群聊的插件", "1.2.0")
+@register("astrbot_plugin_appreview", "qiqi", "一个可以通过卡密验证来同意或拒绝进入群聊的插件", "1.3.0")
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         # 默认配置
         self.config = {
-            "accept_keywords": ["给了", "一键三连了", "三连了"],
-            "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
-            "auto_accept": False,  # 是否自动同意所有申请
-            "auto_reject": False,  # 是否自动拒绝所有申请
-            "reject_reason": "申请被拒绝",  # 拒绝理由
+            "api_url": "http://your-server/check_key.php",  # 卡密验证API地址
+            "auto_accept": False,  # 是否自动同意所有申请 (优先级低于卡密验证)
+            "auto_reject": False,  # 是否自动拒绝所有申请 (优先级低于卡密验证)
+            "reject_reason": "申请被拒绝",  # 默认拒绝理由
             "delay_seconds": 0  # 延迟处理时间（秒）
         }
         
@@ -101,59 +102,84 @@ class AppReviewPlugin(Star):
         if raw_message.get("request_type") == "group" and raw_message.get("sub_type") == "add":
             await self.process_group_join_request(event, raw_message)
     
+    async def verify_key(self, group_id, key_code, user_id):
+        """调用API验证卡密"""
+        api_url = self.config.get("api_url")
+        if not api_url:
+            logger.error("未配置API地址，请在插件设置中配置api_url")
+            return {"status": "error", "message": "系统配置错误，无法验证卡密"}
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 构造请求参数
+                params = {
+                    "group_id": group_id,
+                    "key_code": key_code,
+                    "user_id": user_id,
+                    "use_time": int(time.time())  # 当前时间戳
+                }
+                
+                async with session.post(api_url, data=params) as response:
+                    if response.status != 200:
+                        return {"status": "error", "message": f"API请求失败，状态码: {response.status}"}
+                    
+                    result = await response.json()
+                    return result
+        except Exception as e:
+            logger.error(f"卡密验证API调用失败: {e}")
+            return {"status": "error", "message": f"验证卡密时发生错误: {str(e)}"}
+    
     async def process_group_join_request(self, event: AstrMessageEvent, request_data):
-        """处理加群请求"""
+        """处理加群请求，通过API验证卡密"""
         flag = request_data.get("flag", "")
         user_id = request_data.get("user_id", "")
-        comment = request_data.get("comment", "")
+        comment = request_data.get("comment", "").strip()  # 申请信息中的卡密
         group_id = request_data.get("group_id", "")
         
-        logger.info(f"收到加群请求: 用户ID={user_id}, 群ID={group_id}, 验证信息={comment}")
+        logger.info(f"收到加群请求: 用户ID={user_id}, 群ID={group_id}, 卡密={comment}")
         
         # 获取延迟时间
         delay_seconds = self.config.get("delay_seconds", 0)
+        if delay_seconds > 0:
+            logger.info(f"将在 {delay_seconds} 秒后处理用户 {user_id} 加入群 {group_id} 的请求")
+            await asyncio.sleep(delay_seconds)
         
-        # 自动处理逻辑
+        # 自动处理逻辑 (优先级低于卡密验证，但用户可能仍需要这些选项)
         if self.config["auto_accept"]:
-            if delay_seconds > 0:
-                logger.info(f"将在 {delay_seconds} 秒后自动同意用户 {user_id} 加入群 {group_id} 的请求")
-                await asyncio.sleep(delay_seconds)
             await self.approve_request(event, flag, True)
             logger.info(f"自动同意用户 {user_id} 加入群 {group_id} 的请求")
             return
         
         if self.config["auto_reject"]:
-            if delay_seconds > 0:
-                logger.info(f"将在 {delay_seconds} 秒后自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                await asyncio.sleep(delay_seconds)
             await self.approve_request(event, flag, False, self.config["reject_reason"])
             logger.info(f"自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
             return
         
-        # 根据关键词处理，优先检查拒绝关键词
-        # 先检查是否包含拒绝关键词
-        for keyword in self.config["reject_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
-                await self.approve_request(event, flag, False, self.config["reject_reason"])
-                logger.info(f"根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                return
+        # 卡密为空的情况
+        if not comment:
+            await self.approve_request(event, flag, False, "请提供有效的卡密")
+            logger.info(f"用户 {user_id} 未提供卡密，拒绝加入群 {group_id}")
+            return
         
-        # 再检查是否包含接受关键词
-        for keyword in self.config["accept_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
+        # 调用API验证卡密
+        verify_result = await self.verify_key(group_id, comment, user_id)
+        
+        # 处理验证结果
+        if verify_result["status"] == "success":
+            # 卡密存在，检查是否可用
+            if verify_result.get("usable", 1) == 0:
+                # 卡密可用，同意入群
                 await self.approve_request(event, flag, True)
-                logger.info(f"根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                return
-        
-        # 如果没有匹配到关键词，不做任何处理，等待手动审核
-        logger.info(f"用户 {user_id} 加入群 {group_id} 的请求未匹配到关键词，等待手动审核")
-        return
+                logger.info(f"卡密验证通过，同意用户 {user_id} 加入群 {group_id}")
+            else:
+                # 卡密已使用，拒绝入群
+                await self.approve_request(event, flag, False, "该卡密已使用")
+                logger.info(f"卡密已使用，拒绝用户 {user_id} 加入群 {group_id}")
+        else:
+            # 卡密验证失败
+            reason = verify_result.get("message", "卡密错误")
+            await self.approve_request(event, flag, False, reason)
+            logger.info(f"卡密验证失败，拒绝用户 {user_id} 加入群 {group_id}，原因: {reason}")
     
     async def approve_request(self, event: AstrMessageEvent, flag, approve=True, reason=""):
         """同意或拒绝请求"""
