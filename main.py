@@ -1,4 +1,3 @@
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -205,7 +204,7 @@ class AppReviewPlugin(Star):
             # 检查是否为aiocqhttp平台
             if event.get_platform_name() == "aiocqhttp":
                 # 使用NapCat API格式
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
                 assert isinstance(event, AiocqhttpMessageEvent)
                 client = event.bot
                 
