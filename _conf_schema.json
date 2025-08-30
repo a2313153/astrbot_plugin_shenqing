@@ -1,32 +1,46 @@
 {
-  "accept_keywords": {
-    "type": "list",
-    "title": "自动同意关键词",
-    "description": "当申请消息中包含这些关键词时，将自动同意申请",
-    "default": ["给了", "一键三连了", "三连了"],
-    "items": {
-      "type": "string"
-    }
+  "db_host": {
+    "type": "string",
+    "title": "MySQL主机地址",
+    "description": "MySQL数据库所在的主机地址",
+    "default": "localhost"
   },
-  "reject_keywords": {
-    "type": "list",
-    "title": "自动拒绝关键词",
-    "description": "当申请消息中包含这些关键词时，将自动拒绝申请",
-    "default": ["拒绝", "不同意", "reject", "deny"],
-    "items": {
-      "type": "string"
-    }
+  "db_port": {
+    "type": "int",
+    "title": "MySQL端口",
+    "description": "MySQL数据库的端口号",
+    "default": 3306,
+    "min": 1,
+    "max": 65535
+  },
+  "db_user": {
+    "type": "string",
+    "title": "MySQL用户名",
+    "description": "连接MySQL数据库的用户名",
+    "default": "root"
+  },
+  "db_password": {
+    "type": "string",
+    "title": "MySQL密码",
+    "description": "连接MySQL数据库的密码",
+    "default": ""
+  },
+  "db_name": {
+    "type": "string",
+    "title": "数据库名",
+    "description": "包含qun_keys表的数据库名称",
+    "default": "qun_db"
   },
   "auto_accept": {
     "type": "bool",
     "title": "自动同意所有申请",
-    "description": "启用后将自动同意所有入群申请，优先级高于关键词",
+    "description": "启用后将自动同意所有入群申请，优先级最高",
     "default": false
   },
   "auto_reject": {
     "type": "bool",
     "title": "自动拒绝所有申请",
-    "description": "启用后将自动拒绝所有入群申请，优先级低于自动同意但高于关键词",
+    "description": "启用后将自动拒绝所有入群申请，优先级低于自动同意",
     "default": false
   },
   "reject_reason": {
