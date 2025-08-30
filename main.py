@@ -3,6 +3,9 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Optional
 import asyncio
+import mysql.connector  # 替换sqlite3为mysql-connector
+from mysql.connector import Error
+from datetime import datetime
 
 
 class ApifoxModel:
@@ -11,18 +14,21 @@ class ApifoxModel:
         self.flag = flag
         self.reason = reason
 
-@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词来同意或拒绝进入群聊的插件", "1.2.2")
+@register("astrbot_plugin_appreview", "qiqi", "一个可以通过卡密验证来同意或拒绝进入群聊的插件", "1.4.0")  # 版本号更新
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
-        # 默认配置
+        # 默认配置，更新为MySQL连接参数
         self.config = {
-            "accept_keywords": ["给了", "一键三连了", "三连了"],
-            "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
-            "auto_accept": False,  # 是否自动同意所有申请
-            "auto_reject": False,  # 是否自动拒绝所有申请
+            "db_host": "localhost",      # MySQL主机
+            "db_port": 3306,             # MySQL端口
+            "db_user": "root",           # 数据库用户名
+            "db_password": "",           # 数据库密码
+            "db_name": "qun_db",         # 数据库名
+            "auto_accept": False,        # 是否自动同意所有申请
+            "auto_reject": False,        # 是否自动拒绝所有申请
             "reject_reason": "申请被拒绝",  # 拒绝理由
-            "delay_seconds": 0  # 延迟处理时间（秒）
+            "delay_seconds": 0           # 延迟处理时间（秒）
         }
         
         # 配置加载与验证
@@ -45,10 +51,31 @@ class AppReviewPlugin(Star):
         
         AstrBotMessage.__init__ = patched_init
         logger.info("已应用AstrBotMessage的monkey patch，确保session_id属性存在")
+        
+        # 数据库连接初始化
+        self.db_conn = None
+        self._init_db_connection()
+    
+    def _init_db_connection(self):
+        """初始化MySQL数据库连接"""
+        try:
+            self.db_conn = mysql.connector.connect(
+                host=self.config["db_host"],
+                port=self.config["db_port"],
+                user=self.config["db_user"],
+                password=self.config["db_password"],
+                database=self.config["db_name"],
+                charset="utf8mb4"  # 支持中文
+            )
+            if self.db_conn.is_connected():
+                logger.info(f"成功连接到MySQL数据库: {self.config['db_name']}")
+        except Error as e:
+            logger.error(f"MySQL数据库连接失败: {e}")
+            self.db_conn = None
     
     def _merge_config(self, config):
         """合并配置并打印日志"""
-        if not config:  # 新增：检查配置是否为null
+        if not config:
             logger.warning("传入的配置为null，使用默认配置")
             return
             
@@ -68,7 +95,6 @@ class AppReviewPlugin(Star):
     def load_config(self):
         """加载配置"""
         try:
-            # 新增：检查context是否有效
             if not self.context or not hasattr(self.context, "get_config"):
                 logger.warning("context对象无效，无法加载配置，使用默认配置")
                 return
@@ -82,24 +108,20 @@ class AppReviewPlugin(Star):
             logger.error(f"群聊申请审核插件配置加载失败: {e}")
     
     def set_session_id(self, event):
-        """设置session_id属性，增加全面的空值检查"""
-        # 检查event是否有效
+        """设置session_id属性"""
         if not event:
             logger.warning("event为null，无法设置session_id")
             return
             
-        # 检查message_obj是否存在且有效
         if not hasattr(event, "message_obj") or event.message_obj is None:
             logger.warning("event.message_obj为null，无法设置session_id")
             return
             
         raw_message = event.message_obj.raw_message
-        # 检查raw_message是否有效
         if not isinstance(raw_message, dict):
             logger.warning(f"raw_message不是字典类型: {type(raw_message)}，无法设置session_id")
             return
             
-        # 设置session_id
         if not hasattr(event.message_obj, "session_id") or not event.message_obj.session_id:
             if "group_id" in raw_message and raw_message["group_id"]:
                 event.message_obj.session_id = str(raw_message["group_id"])
@@ -111,47 +133,47 @@ class AppReviewPlugin(Star):
     
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_group_request(self, event: AstrMessageEvent):
-        """处理群聊申请事件，增加全面的空值检查"""
-        # 基础空值检查
+        """处理群聊申请事件"""
         if not event:
             logger.warning("收到空的event对象，跳过处理")
             return
             
-        # 检查message_obj是否存在
         if not hasattr(event, "message_obj") or event.message_obj is None:
             logger.warning("event.message_obj为null，跳过处理")
             return
             
-        # 获取并检查raw_message
         raw_message = event.message_obj.raw_message
         if not raw_message or not isinstance(raw_message, dict):
             logger.warning(f"raw_message格式异常: {raw_message}，类型: {type(raw_message)}，跳过处理")
             return
         
-        # 检查事件类型
         if raw_message.get("post_type") != "request":
             return
         
-        # 设置session_id
         self.set_session_id(event)
         
-        # 处理加群请求
         if raw_message.get("request_type") == "group" and raw_message.get("sub_type") == "add":
             await self.process_group_join_request(event, raw_message)
     
     async def process_group_join_request(self, event: AstrMessageEvent, request_data):
-        """处理加群请求"""
-        # 检查request_data有效性
+        """处理加群请求，使用MySQL数据库卡密验证"""
         if not request_data or not isinstance(request_data, dict):
             logger.warning("无效的request_data，跳过处理")
             return
             
+        # 检查数据库连接
+        if not self.db_conn or not self.db_conn.is_connected():
+            logger.error("MySQL数据库连接未初始化或已断开，尝试重新连接...")
+            self._init_db_connection()  # 尝试重新连接
+            if not self.db_conn or not self.db_conn.is_connected():
+                logger.error("重新连接失败，无法处理申请")
+                return
+            
         flag = request_data.get("flag", "")
         user_id = request_data.get("user_id", "")
-        comment = request_data.get("comment", "")
+        comment = request_data.get("comment", "")  # 入群申请消息，包含卡密
         group_id = request_data.get("group_id", "")
         
-        # 基础参数检查
         if not flag:
             logger.warning("加群请求缺少flag参数，无法处理")
             return
@@ -160,7 +182,7 @@ class AppReviewPlugin(Star):
         
         delay_seconds = self.config.get("delay_seconds", 0)
         
-        # 自动同意逻辑
+        # 自动同意逻辑（优先级最高）
         if self.config["auto_accept"]:
             if delay_seconds > 0:
                 logger.info(f"将在 {delay_seconds} 秒后自动同意用户 {user_id} 加入群 {group_id} 的请求")
@@ -179,34 +201,58 @@ class AppReviewPlugin(Star):
             logger.info(f"自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
             return
         
-        # 关键词拒绝逻辑
-        for keyword in self.config["reject_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
-                logger.info(f"关键词拒绝，使用理由: {self.config['reject_reason']}")
-                await self.approve_request(event, flag, False, self.config["reject_reason"])
-                logger.info(f"根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
-                return
-        
-        # 关键词同意逻辑
-        for keyword in self.config["accept_keywords"]:
-            if keyword.lower() in comment.lower():
-                if delay_seconds > 0:
-                    logger.info(f"将在 {delay_seconds} 秒后根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                    await asyncio.sleep(delay_seconds)
-                await self.approve_request(event, flag, True)
-                logger.info(f"根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
-                return
-        
-        logger.info(f"用户 {user_id} 加入群 {group_id} 的请求未匹配到关键词，等待手动审核")
-        return
+        # 卡密验证逻辑
+        try:
+            # 延迟处理
+            if delay_seconds > 0:
+                logger.info(f"将在 {delay_seconds} 秒后验证用户 {user_id} 的卡密")
+                await asyncio.sleep(delay_seconds)
+            
+            # 查询数据库验证卡密
+            cursor = self.db_conn.cursor()
+            
+            # 检查群是否存在并验证卡密（MySQL使用%s作为占位符）
+            cursor.execute(
+                "SELECT id, usable FROM qun_keys WHERE group_id = %s AND key_code = %s",
+                (group_id, comment)
+            )
+            result = cursor.fetchone()
+            
+            if result:
+                record_id, usable = result
+                # 检查卡密是否可用（usable=0）
+                if usable == 0:
+                    # 更新卡密使用信息
+                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute(
+                        "UPDATE qun_keys SET usable = 1, use_time = %s, used_by = %s WHERE id = %s",
+                        (current_time, user_id, record_id)
+                    )
+                    self.db_conn.commit()  # MySQL需要显式提交事务
+                    
+                    # 同意入群
+                    await self.approve_request(event, flag, True)
+                    logger.info(f"卡密验证通过，同意用户 {user_id} 加入群 {group_id} 的请求")
+                    return
+                else:
+                    logger.info(f"卡密已被使用，拒绝用户 {user_id} 加入群 {group_id} 的请求")
+            else:
+                logger.info(f"卡密不存在或群不匹配，拒绝用户 {user_id} 加入群 {group_id} 的请求")
+            
+            # 卡密验证失败，拒绝入群
+            await self.approve_request(event, flag, False, "卡密验证失败，无法入群")
+            
+        except Error as e:
+            logger.error(f"MySQL操作出错: {e}")
+            self.db_conn.rollback()  # 出错时回滚事务
+            await self.approve_request(event, flag, False, "验证过程出错，请联系管理员")
+        finally:
+            if 'cursor' in locals() and cursor:
+                cursor.close()
     
     async def approve_request(self, event: AstrMessageEvent, flag, approve=True, reason=""):
-        """同意或拒绝请求，增加全面的空值检查"""
+        """同意或拒绝请求"""
         try:
-            # 基础参数检查
             if not event:
                 logger.error("event为null，无法处理请求")
                 return False
@@ -215,87 +261,21 @@ class AppReviewPlugin(Star):
                 logger.error("flag参数为空，无法处理请求")
                 return False
             
-            # 设置session_id
             self.set_session_id(event)
             
-            # 验证理由参数
             if not approve and not reason:
                 reason = "申请被拒绝（默认理由）"
-                logger.warning("拒绝操作未指定理由，使用默认值")
             
-            logger.info(f"执行{'同意' if approve else '拒绝'}操作，理由：{reason}")
-            
-            # 检查平台名称获取方法
-            if not hasattr(event, "get_platform_name"):
-                logger.warning("event对象没有get_platform_name方法，使用通用处理方式")
-                platform_name = None
-            else:
-                platform_name = event.get_platform_name()
-            
-            # 处理aiocqhttp平台
-            if platform_name == "aiocqhttp":
-                try:
-                    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                    # 检查事件类型和bot对象
-                    if not isinstance(event, AiocqhttpMessageEvent):
-                        logger.error("事件不是AiocqhttpMessageEvent类型")
-                        return False
-                        
-                    if not event.bot:
-                        logger.error("event.bot为null，无法执行操作")
-                        return False
-                        
-                    client = event.bot
-                    
-                    # 检查client是否有call_action方法
-                    if not hasattr(client, "call_action"):
-                        logger.error("client对象没有call_action方法")
-                        return False
-                    
-                    api_model = ApifoxModel(
-                        approve=approve,
-                        flag=flag,
-                        reason=reason
-                    )
-                    
-                    payloads = {
-                        "flag": api_model.flag,
-                        "sub_type": "add",
-                        "approve": api_model.approve,
-                        "reason": api_model.reason
-                    }
-                    
-                    await client.call_action('set_group_add_request', **payloads)
-                    return True
-                except ImportError:
-                    logger.error("导入AiocqhttpMessageEvent失败，可能平台支持不完整")
-                    return False
-                except Exception as e:
-                    logger.error(f"aiocqhttp平台处理失败: {str(e)}")
-                    return False
-            
-            # 处理其他平台
-            if not hasattr(event, "bot") or event.bot is None:
-                logger.error("event.bot为null，无法执行操作")
-                return False
-                
-            if not hasattr(event.bot, "call_action"):
-                logger.error("bot对象没有call_action方法")
-                return False
-                
-            await event.bot.call_action(
-                "set_group_add_request",
-                flag=flag,
-                sub_type="add",
-                approve=approve,
-                reason=reason
-            )
+            # 调用AstrBot的API处理入群申请
+            await event.message_obj.approve_group_request(flag, approve, reason)
             return True
             
         except Exception as e:
-            logger.error(f"处理群聊申请失败: {str(e)}")
+            logger.error(f"处理请求时出错: {e}")
             return False
     
-    async def terminate(self):
-        """插件被卸载/停用时调用"""
-        logger.info("群聊申请审核插件已停用")
+    def __del__(self):
+        """销毁对象时关闭数据库连接"""
+        if self.db_conn and self.db_conn.is_connected():
+            self.db_conn.close()
+            logger.info("MySQL数据库连接已关闭")
