@@ -1,3 +1,8 @@
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Context, Star, register
+from astrbot.api import logger
+from typing import Optional
+import asyncio
 import requests
 import re
 import logging
