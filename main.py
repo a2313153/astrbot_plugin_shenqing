@@ -3,8 +3,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from typing import Optional
 import asyncio
-# 新增：导入异步HTTP请求库
-import aiohttp
+import aiohttp  # 新增：用于发送HTTP请求
 
 
 class ApifoxModel:
@@ -13,23 +12,23 @@ class ApifoxModel:
         self.flag = flag
         self.reason = reason
 
-@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词和卡密来同意或拒绝进入群聊的插件", "1.3.0")  # 版本号更新
+@register("astrbot_plugin_appreview", "qiqi", "一个可以通过关键词或卡密来同意或拒绝进入群聊的插件", "1.3.0")
 class AppReviewPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
-        # 默认配置（新增卡密验证相关配置）
+        # 默认配置，新增卡密验证相关配置
         self.config = {
             "accept_keywords": ["给了", "一键三连了", "三连了"],
             "reject_keywords": ["拒绝", "不同意", "reject", "deny"],
-            "auto_accept": False,
-            "auto_reject": False,
-            "reject_reason": "申请被拒绝",
-            "delay_seconds": 0,
-            # 新增：卡密验证API配置
-            "card_code_api_url": "https://your-api-domain.com/verify_card",  # 卡密验证接口地址
-            "card_code_keywords": ["卡密", "激活码", "code"],  # 卡密关键词
-            "card_code_separators": [":", "：", "=", " "],  # 卡密分隔符
-            "invalid_card_reason": "卡密无效或已过期"  # 卡密无效时的拒绝理由
+            "auto_accept": False,  # 是否自动同意所有申请
+            "auto_reject": False,  # 是否自动拒绝所有申请
+            "reject_reason": "申请被拒绝",  # 拒绝理由
+            "delay_seconds": 0,  # 延迟处理时间（秒）
+            # 新增：卡密验证相关配置
+            "use_verify_code": True,  # 是否启用卡密验证
+            "verify_api_url": "https://qun.yz01.baby/verify_key.php",  # 卡密验证API地址
+            "verify_code_prefix": "",  # 卡密前缀（可选，如"CODE:"）
+            "priority_verify_code": True  # 卡密验证是否优先于关键词验证
         }
         
         # 配置加载与验证
@@ -40,8 +39,9 @@ class AppReviewPlugin(Star):
         
         # 验证拒绝理由配置有效性
         self._validate_reject_reason()
+        
         # 新增：验证卡密API配置
-        self._validate_card_api_config()
+        self._validate_verify_api_config()
         
         # Monkey patch AstrBotMessage类，确保所有实例都有session_id属性
         from astrbot.core.platform.astrbot_message import AstrBotMessage
@@ -57,7 +57,7 @@ class AppReviewPlugin(Star):
     
     def _merge_config(self, config):
         """合并配置并打印日志"""
-        if not config:  # 新增：检查配置是否为null
+        if not config:  # 检查配置是否为null
             logger.warning("传入的配置为null，使用默认配置")
             return
             
@@ -74,23 +74,22 @@ class AppReviewPlugin(Star):
         else:
             logger.info(f"当前拒绝理由配置: {self.config['reject_reason']}")
     
-    # 新增：验证卡密API配置有效性
-    def _validate_card_api_config(self):
-        """验证卡密API配置"""
-        if not self.config["card_code_api_url"]:
-            self.config["card_code_api_url"] = "https://qun.yz01.baby/verify_card.php"
-            logger.warning("卡密验证API地址未配置，已使用默认值")
-        if not self.config["card_code_keywords"]:
-            self.config["card_code_keywords"] = ["卡密", "激活码", "code"]
-            logger.warning("卡密关键词未配置，已使用默认值")
-        if not self.config["invalid_card_reason"]:
-            self.config["invalid_card_reason"] = "卡密无效或已过期"
-            logger.warning("卡密无效理由未配置，已使用默认值")
+    # 新增：验证卡密API配置
+    def _validate_verify_api_config(self):
+        """验证卡密API配置有效性"""
+        if self.config["use_verify_code"]:
+            if not self.config["verify_api_url"]:
+                logger.warning("卡密验证已启用，但未配置API地址，将禁用卡密验证")
+                self.config["use_verify_code"] = False
+            else:
+                logger.info(f"卡密验证已启用，API地址: {self.config['verify_api_url']}")
+        else:
+            logger.info("卡密验证已禁用")
     
     def load_config(self):
         """加载配置"""
         try:
-            # 新增：检查context是否有效
+            # 检查context是否有效
             if not self.context or not hasattr(self.context, "get_config"):
                 logger.warning("context对象无效，无法加载配置，使用默认配置")
                 return
@@ -131,56 +130,42 @@ class AppReviewPlugin(Star):
                 event.message_obj.session_id = "unknown_session"
                 logger.info("无法从raw_message中获取group_id或user_id，使用默认session_id")
     
-    # 新增：从验证信息中提取卡密
-    def extract_card_code(self, comment: str) -> Optional[str]:
-        """从用户验证信息中提取卡密"""
-        if not comment:
-            return None
-            
-        comment_lower = comment.lower()
-        # 检查卡密关键词
-        for keyword in self.config["card_code_keywords"]:
-            if keyword.lower() in comment_lower:
-                # 提取关键词后的内容
-                keyword_index = comment_lower.find(keyword.lower())
-                content_after_keyword = comment[keyword_index + len(keyword):].strip()
-                
-                # 处理分隔符
-                for sep in self.config["card_code_separators"]:
-                    if sep in content_after_keyword:
-                        card_code = content_after_keyword.split(sep)[0].strip()
-                        return card_code if card_code else None
-                
-                # 无分隔符时取全部内容
-                return content_after_keyword if content_after_keyword else None
-        
-        return None
-    
-    # 新增：异步验证卡密
-    async def verify_card_code(self, card_code: str) -> bool:
-        """调用API验证卡密有效性"""
+    # 新增：卡密验证API调用函数
+    async def verify_card_code(self, card_code):
+        """调用卡密验证API验证卡密有效性"""
         if not card_code:
-            return False
+            logger.warning("卡密为空，验证失败")
+            return False, "卡密不能为空"
             
+        # 如果配置了前缀，移除前缀再验证
+        if self.config["verify_code_prefix"] and card_code.startswith(self.config["verify_code_prefix"]):
+            card_code = card_code[len(self.config["verify_code_prefix"]):]
+            logger.info(f"移除卡密前缀后的值: {card_code}")
+        
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.config["card_code_api_url"],
-                    json={"card_code": card_code},
-                    timeout=10  # 10秒超时
-                ) as response:
+                payload = {"card_code": card_code}
+                async with session.post(self.config["verify_api_url"], json=payload) as response:
                     if response.status != 200:
-                        logger.error(f"卡密验证API返回异常状态码: {response.status}")
-                        return False
+                        error_msg = f"API请求失败，状态码: {response.status}"
+                        logger.error(error_msg)
+                        return False, error_msg
                         
-                    result = await response.json()
-                    # 假设API返回格式为 {"status": "success"} 表示有效
-                    return result.get("status") == "success"
+                    response_data = await response.json()
                     
+                    if response_data.get("status") == "success":
+                        logger.info(f"卡密验证成功: {card_code}")
+                        return True, response_data.get("msg", "卡密有效")
+                    else:
+                        error_msg = response_data.get("msg", "卡密无效")
+                        logger.warning(f"卡密验证失败: {card_code}, 原因: {error_msg}")
+                        return False, error_msg
+                        
         except Exception as e:
-            logger.error(f"卡密验证API调用失败: {str(e)}")
-            return False
-
+            error_msg = f"卡密验证API调用异常: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_group_request(self, event: AstrMessageEvent):
         """处理群聊申请事件，增加全面的空值检查"""
@@ -212,7 +197,7 @@ class AppReviewPlugin(Star):
             await self.process_group_join_request(event, raw_message)
     
     async def process_group_join_request(self, event: AstrMessageEvent, request_data):
-        """处理加群请求（新增卡密验证逻辑）"""
+        """处理加群请求，增加卡密验证逻辑"""
         # 检查request_data有效性
         if not request_data or not isinstance(request_data, dict):
             logger.warning("无效的request_data，跳过处理")
@@ -232,29 +217,7 @@ class AppReviewPlugin(Star):
         
         delay_seconds = self.config.get("delay_seconds", 0)
         
-        # 新增：卡密验证逻辑（优先于原有逻辑执行）
-        card_code = self.extract_card_code(comment)
-        if card_code:
-            logger.info(f"从用户 {user_id} 的验证信息中提取到卡密: {card_code}")
-            
-            if delay_seconds > 0:
-                logger.info(f"将在 {delay_seconds} 秒后验证卡密")
-                await asyncio.sleep(delay_seconds)
-                
-            # 验证卡密
-            is_valid = await self.verify_card_code(card_code)
-            if is_valid:
-                await self.approve_request(event, flag, True)
-                logger.info(f"卡密验证通过，同意用户 {user_id} 加入群 {group_id}")
-                return
-            else:
-                await self.approve_request(event, flag, False, self.config["invalid_card_reason"])
-                logger.info(f"卡密验证失败，拒绝用户 {user_id} 加入群 {group_id}")
-                return
-        else:
-            logger.info(f"用户 {user_id} 的验证信息中未提取到有效卡密，执行原有验证逻辑")
-        
-        # 原有自动同意逻辑
+        # 自动同意逻辑
         if self.config["auto_accept"]:
             if delay_seconds > 0:
                 logger.info(f"将在 {delay_seconds} 秒后自动同意用户 {user_id} 加入群 {group_id} 的请求")
@@ -263,7 +226,7 @@ class AppReviewPlugin(Star):
             logger.info(f"自动同意用户 {user_id} 加入群 {group_id} 的请求")
             return
         
-        # 原有自动拒绝逻辑
+        # 自动拒绝逻辑
         if self.config["auto_reject"]:
             if delay_seconds > 0:
                 logger.info(f"将在 {delay_seconds} 秒后自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
@@ -273,7 +236,30 @@ class AppReviewPlugin(Star):
             logger.info(f"自动拒绝用户 {user_id} 加入群 {group_id} 的请求")
             return
         
-        # 原有关键词拒绝逻辑
+        # 新增：卡密验证逻辑
+        if self.config["use_verify_code"]:
+            # 尝试从验证信息中提取卡密并验证
+            verify_success, verify_msg = await self.verify_card_code(comment)
+            
+            if verify_success:
+                # 卡密验证成功，同意入群
+                if delay_seconds > 0:
+                    logger.info(f"将在 {delay_seconds} 秒后因卡密验证成功同意用户 {user_id} 加入群 {group_id} 的请求")
+                    await asyncio.sleep(delay_seconds)
+                await self.approve_request(event, flag, True)
+                logger.info(f"卡密验证成功，同意用户 {user_id} 加入群 {group_id} 的请求: {verify_msg}")
+                return
+                
+            if self.config["priority_verify_code"]:
+                # 卡密验证优先模式下，验证失败直接拒绝
+                if delay_seconds > 0:
+                    logger.info(f"将在 {delay_seconds} 秒后因卡密验证失败拒绝用户 {user_id} 加入群 {group_id} 的请求")
+                    await asyncio.sleep(delay_seconds)
+                await self.approve_request(event, flag, False, verify_msg or self.config["reject_reason"])
+                logger.info(f"卡密验证失败，拒绝用户 {user_id} 加入群 {group_id} 的请求: {verify_msg}")
+                return
+        
+        # 关键词拒绝逻辑
         for keyword in self.config["reject_keywords"]:
             if keyword.lower() in comment.lower():
                 if delay_seconds > 0:
@@ -284,7 +270,7 @@ class AppReviewPlugin(Star):
                 logger.info(f"根据关键词 '{keyword}' 拒绝用户 {user_id} 加入群 {group_id} 的请求")
                 return
         
-        # 原有关键词同意逻辑
+        # 关键词同意逻辑
         for keyword in self.config["accept_keywords"]:
             if keyword.lower() in comment.lower():
                 if delay_seconds > 0:
@@ -293,6 +279,12 @@ class AppReviewPlugin(Star):
                 await self.approve_request(event, flag, True)
                 logger.info(f"根据关键词 '{keyword}' 同意用户 {user_id} 加入群 {group_id} 的请求")
                 return
+        
+        # 如果启用了卡密验证但未验证通过，且不是优先模式，则拒绝
+        if self.config["use_verify_code"]:
+            logger.info(f"用户 {user_id} 加入群 {group_id} 的请求未提供有效卡密，拒绝入群")
+            await self.approve_request(event, flag, False, "未提供有效卡密，拒绝入群")
+            return
         
         logger.info(f"用户 {user_id} 加入群 {group_id} 的请求未匹配到关键词，等待手动审核")
         return
