@@ -19,7 +19,7 @@ class AppReviewPlugin(Star):
         super().__init__(context)
         # 默认配置
         self.config = {
-            "api_url": "http://your-server/check_key.php",  # 卡密验证API地址
+            "api_url": "https://qun.yz01.baby/api/check_key.php",  # 卡密验证API地址
             "auto_accept": False,  # 是否自动同意所有申请 (优先级低于卡密验证)
             "auto_reject": False,  # 是否自动拒绝所有申请 (优先级低于卡密验证)
             "reject_reason": "申请被拒绝",  # 默认拒绝理由
