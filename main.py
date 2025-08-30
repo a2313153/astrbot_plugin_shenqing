@@ -103,31 +103,45 @@ class AppReviewPlugin(Star):
             await self.process_group_join_request(event, raw_message)
     
     async def verify_key(self, group_id, key_code, user_id):
-        """调用API验证卡密"""
-        api_url = self.config.get("api_url")
-        if not api_url:
-            logger.error("未配置API地址，请在插件设置中配置api_url")
-            return {"status": "error", "message": "系统配置错误，无法验证卡密"}
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                # 构造请求参数
-                params = {
-                    "group_id": group_id,
-                    "key_code": key_code,
-                    "user_id": user_id,
-                    "use_time": int(time.time())  # 当前时间戳
-                }
+    """调用API验证卡密"""
+    api_url = self.config.get("api_url")
+    if not api_url:
+        logger.error("未配置API地址，请在插件设置中配置api_url")
+        return {"status": "error", "message": "系统配置错误，无法验证卡密"}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            # 构造请求参数
+            params = {
+                "group_id": group_id,
+                "key_code": key_code,
+                "user_id": user_id,
+                "use_time": int(time.time())  # 当前时间戳
+            }
+            
+            async with session.post(api_url, data=params) as response:
+                status_code = response.status
+                # 先获取原始响应内容
+                response_text = await response.text()
+                logger.debug(f"API响应状态码: {status_code}, 原始响应内容: {response_text}")
                 
-                async with session.post(api_url, data=params) as response:
-                    if response.status != 200:
-                        return {"status": "error", "message": f"API请求失败，状态码: {response.status}"}
-                    
+                if status_code != 200:
+                    return {"status": "error", "message": f"API请求失败，状态码: {status_code}，响应内容: {response_text}"}
+                
+                try:
+                    # 尝试解析JSON
                     result = await response.json()
                     return result
-        except Exception as e:
-            logger.error(f"卡密验证API调用失败: {e}")
-            return {"status": "error", "message": f"验证卡密时发生错误: {str(e)}"}
+                except json.JSONDecodeError as e:
+                    # 捕获JSON解析错误
+                    logger.error(f"API返回内容不是有效的JSON: {response_text}, 错误信息: {str(e)}")
+                    return {
+                        "status": "error", 
+                        "message": f"卡密验证失败，API返回无效格式: {str(e)}，原始内容: {response_text[:100]}..."
+                    }
+    except Exception as e:
+        logger.error(f"卡密验证API调用失败: {e}")
+        return {"status": "error", "message": f"验证卡密时发生错误: {str(e)}"}
     
     async def process_group_join_request(self, event: AstrMessageEvent, request_data):
         """处理加群请求，通过API验证卡密"""
