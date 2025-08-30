@@ -1,8 +1,20 @@
 {
+  "api_url": {
+    "type": "string",
+    "title": "卡密验证API地址",
+    "description": "用于验证入群卡密的API接口地址",
+    "default": "http://your-api-domain.com/verify_key.php"
+  },
+  "use_api_verification": {
+    "type": "bool",
+    "title": "启用API卡密验证",
+    "description": "启用后将通过API验证卡密来处理入群申请，优先级最高",
+    "default": true
+  },
   "accept_keywords": {
     "type": "list",
     "title": "自动同意关键词",
-    "description": "当申请消息中包含这些关键词时，将自动同意申请",
+    "description": "当申请消息中包含这些关键词时，将自动同意申请（API验证关闭时生效）",
     "default": ["给了", "一键三连了", "三连了"],
     "items": {
       "type": "string"
@@ -11,7 +23,7 @@
   "reject_keywords": {
     "type": "list",
     "title": "自动拒绝关键词",
-    "description": "当申请消息中包含这些关键词时，将自动拒绝申请",
+    "description": "当申请消息中包含这些关键词时，将自动拒绝申请（API验证关闭时生效）",
     "default": ["拒绝", "不同意", "reject", "deny"],
     "items": {
       "type": "string"
@@ -20,13 +32,13 @@
   "auto_accept": {
     "type": "bool",
     "title": "自动同意所有申请",
-    "description": "启用后将自动同意所有入群申请，优先级高于关键词",
+    "description": "启用后将自动同意所有入群申请，优先级高于关键词（API验证关闭时生效）",
     "default": false
   },
   "auto_reject": {
     "type": "bool",
     "title": "自动拒绝所有申请",
-    "description": "启用后将自动拒绝所有入群申请，优先级低于自动同意但高于关键词",
+    "description": "启用后将自动拒绝所有入群申请，优先级低于自动同意但高于关键词（API验证关闭时生效）",
     "default": false
   },
   "reject_reason": {
